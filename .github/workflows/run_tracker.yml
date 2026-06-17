@@ -1,0 +1,29 @@
+name: Run Vivid Experimental Tracker
+
+on:
+  workflow_dispatch: # Allows manual trigger click
+  schedule:
+    - cron: '0 */6 * * *' # Runs every 6 hours automatically
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository Code
+      uses: actions/checkout@v4
+
+    - name: Set Up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install System Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Install Automated Web Browsers
+      run: playwright install chromium
+
+    - name: Execute Network Sniffer Matrix
+      run: python vivid_tracker.py
