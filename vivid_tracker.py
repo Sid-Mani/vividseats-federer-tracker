@@ -8,58 +8,89 @@ from playwright_stealth import Stealth
 # Configuration
 MY_BUDGET = 250
 MAX_DISPLAY_PRICE = 350
-DISCORD_WEBHOOK_URL = "" # Add your webhook if you want alerts
+DISCORD_WEBHOOK_URL = "" 
 
 VIVID_URL = "https://www.vividseats.com/us-open-roger-federer---an-icon-returns-to-ny-tickets-arthur-ashe-stadium-8-25-2026--sports-tennis/production/7134771?quantity=2"
 
 verified_tickets = []
 
-def parse_vivid_json(response):
-    """Intercepts network traffic and targets the hidden production API data payload."""
+def parse_any_json(response):
+    """Deep searches EVERY background network packet for valid seat structures."""
     try:
-        # We target their specific server data route
-        if "production" in response.url and "vividseats.com" in response.url and response.status == 200:
+        # Check if the packet is actual JSON data
+        if "json" in response.headers.get("content-type", "").lower() and response.status == 200:
             payload = response.json()
             
-            # Navigate Vivid's native JSON dictionary path
-            listings = payload.get("global_listings", []) or payload.get("listings", [])
+            # Stringify everything to look for lists of data
+            payload_str = str(payload)
             
-            for item in listings:
-                # Safely extract their native data keys
-                section = str(item.get("section", ""))
-                row = str(item.get("row", "")).upper()
-                price = int(item.get("price", 0))
+            # If the response contains pricing data, hunt for listings inside it
+            if "price" in payload_str and ("section" in payload_str or "sec" in payload_str):
                 
-                # Check bounds (Arthur Ashe 100-400 upper bowl levels)
-                if section.isdigit() and 100 <= int(section) <= 499:
-                    if MY_BUDGET <= price <= MAX_DISPLAY_PRICE:
-                        verified_tickets.append({
-                            "section": section,
-                            "row": row,
-                            "price": price
-                        })
-    except Exception as e:
-        pass # Ignore assets or non-JSON payloads tripping the interceptor
+                # Recursively dig through the JSON objects to find list blocks
+                find_listings_deep(payload)
+                
+    except Exception:
+        pass
+
+def find_listings_deep(obj):
+    """Recursively walks any JSON structure looking for dictionaries that resemble ticket items."""
+    if isinstance(obj, dict):
+        # Does this specific dictionary look like a ticket?
+        if "price" in obj and ("section" in obj or "row" in obj):
+            try:
+                # Extract values flexibly, checking for variations in keys
+                price_val = obj.get("price") or obj.get("currentPrice") or obj.get("value")
+                section_val = obj.get("section") or obj.get("sectionName") or obj.get("sec")
+                row_val = obj.get("row") or obj.get("rowName") or ""
+                
+                if price_val and section_val:
+                    # Strip any currency symbols or commas, cast to integer
+                    price = int(float(re.sub(r'[^\d.]', '', str(price_val))))
+                    section = str(section_val).strip()
+                    row = str(row_val).strip().upper()
+                    
+                    # Target upper bowl bounds (100-400 sections)
+                    if section.isdigit() and 100 <= int(section) <= 499:
+                        if price <= MAX_DISPLAY_PRICE:
+                            ticket_id = f"{section}-{row}-{price}"
+                            # Prevent duplicates from firing multiple times
+                            if ticket_id not in [f"{t['section']}-{t['row']}-{t['price']}" for t in verified_tickets]:
+                                verified_tickets.append({
+                                    "section": section,
+                                    "row": row,
+                                    "price": price
+                              })
+            except:
+                pass
+        else:
+            for key, value in obj.items():
+                find_listings_deep(value)
+                
+    elif isinstance(obj, list):
+        for item in obj:
+            find_listings_deep(item)
 
 def fire_discord_report():
+    print(f"\n📊 [VividSeats Scan Summary] Total unique listings caught: {len(verified_tickets)}")
     if not verified_tickets:
-        print("📊 [VividSeats] No listings found within the price boundaries.")
+        print("❌ Net caught data packets, but zero fit within your specific criteria rules.")
         return
         
     # Sort by price ascending
     verified_tickets.sort(key=lambda x: x['price'])
     
-    report = "🔬 **VIVIDSEATS EXPERIMENTAL SANDBOX FEED** 🔬\n====================================\n"
-    for t in verified_tickets[:30]: # Limit to top 30 rows to prevent spam
+    report = "🔬 **VIVIDSEATS DEEP PACKET SUMMARY** 🔬\n====================================\n"
+    for t in verified_tickets[:30]: 
         report += f"• Sec {t['section']}, Row {t['row']} ➔ **${t['price']}**\n"
         
-    print(report) # Print to GitHub logs
+    print(report) # Print to GitHub Actions log terminal
     
     if DISCORD_WEBHOOK_URL:
         requests.post(DISCORD_WEBHOOK_URL, json={"content": report})
 
 def main():
-    print("📡 Booting Live Packet Sniffer Matrix for VividSeats...")
+    print("📡 Launching Deep Network-Packet Sniffer Matrix...")
     stealth = Stealth()
     
     with sync_playwright() as p:
@@ -73,20 +104,20 @@ def main():
         stealth.apply_stealth_sync(context)
         page = context.new_page()
         
-        # Attach our custom network packet sniffer to the page layout
-        page.on("response", parse_vivid_json)
+        # Attach the universal JSON detector
+        page.on("response", parse_any_json)
         
         try:
-            # Open link and wait for all background API calls to clear complete
-            page.goto(VIVID_URL, wait_until="networkidle", timeout=60000)
-            time.sleep(15) # Give scripts extra breathing room to populate the data cards
+            # Let it load fully
+            page.goto(VIVID_URL, wait_until="load", timeout=60000)
+            print("⏳ Page hit. Standing by for background web traffic assets...")
+            time.sleep(20) # Give the page extra time to query the inventory backend
         except Exception as e:
-            print(f"⚠️ Page loading timeout occurred: {str(e)}")
+            print(f"⚠️ Page navigation break: {str(e)}")
             
         browser.close()
         
     fire_discord_report()
-    print("🏁 Sandbox Evaluation Complete.")
 
 if __name__ == "__main__":
     main()
